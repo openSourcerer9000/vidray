@@ -1,0 +1,34 @@
+package:
+  name: "vidray"
+  version: "0.1.0"
+
+source:
+  # Relative path to the parent directory.
+  path: ..
+
+requirements:
+  host:
+    - python
+    - setuptools
+  build:
+    - python {{ python }}
+  run:
+    - python
+    # dependencies are defined in setup.py
+    {% for dep in data['install_requires'] %}
+    - {{ dep.lower() }}
+    {% endfor %}
+    # - dependencyPackage1
+    # - dependencyPackage2
+    # ...
+
+about:
+  home: https://github.com/openSourcerer9000/vidray
+  license: MIT license
+  license_familY: MIT license
+  license_file: LICENSE
+  summary: "Xarray with dask distributed for video editing - made for larger than memory lazy operations"
+
+extra:
+  recipe-maintainers:
+    - openSourcerer9000
