@@ -213,7 +213,13 @@ class Vid(BinaryOperable, Scalable):
         """
         Returns a single frame as a PIL Image (converting the computed array).
         """
-        arr = self.data.isel(frame=index).compute().values
+        # Persist Intermediate Results:
+        # If the transformation graph is very deep or fragmented, consider calling .persist() on the scaled video before preview.
+        # Select and persist one frame
+        lazy_frame = self.data.isel(frame=index).persist()
+        arr = lazy_frame.compute().values
+        return Image.fromarray(arr)
+
         return arr
     def preview(self, index: int = 0) -> Image:
         """
