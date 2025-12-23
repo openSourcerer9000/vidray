@@ -92,10 +92,10 @@ class Img(BinaryOperable, Scalable):
         return self._applyBinaryOp(other, operator.truediv, intermediate=np.float32)
 
 class Vid(BinaryOperable, Scalable):
-    def __init__(self, pathsOrImgs: Union[List[Path], List[Img], Path], chunks: tuple = (1, 512, 512, -1)):
+    def __init__(self, pathsOrImgs: Union[List[Path], List[Img], Path],suff='.jpg', chunks: tuple = (1, 512, 512, -1)):
         if isinstance(pathsOrImgs, Path):
             if pathsOrImgs.is_dir():
-                pngs = list(pathsOrImgs.glob("*.png"))
+                pngs = list(pathsOrImgs.glob(f"*{suff}"))
                 if not pngs:
                     files = list(pathsOrImgs.glob('*.*'))
                     suffs = pd.Series([f.suffix for f in files])
@@ -144,12 +144,12 @@ class Vid(BinaryOperable, Scalable):
             return Image.fromarray(arr)
     def preview(self, index: int = 0) -> Image:
         return self.frame(index)
-    def writePngs(self, outDest: Union[Path, list], pre: str = "frame", overwrite: bool = False):
+    def bounce(self, outDest: Union[Path, list], pre: str = "frame", overwrite: bool = True,suff='.jpg'):
         from dask import delayed
         nFrames = self.data.sizes["frame"]
         if isinstance(outDest, Path):
             outDest.mkdir(parents=True, exist_ok=True)
-            filePaths = [outDest / f"{pre}{i:08d}.png" for i in range(nFrames)]
+            filePaths = [outDest / f"{pre}{i:08d}{suff}" for i in range(nFrames)]
         elif isinstance(outDest, list):
             filePaths = outDest
             if len(filePaths) != nFrames:
@@ -189,3 +189,19 @@ class Vid(BinaryOperable, Scalable):
         return self._applyBinaryOp(other, operator.mul)
     def __truediv__(self, other) -> "Vid":
         return self._applyBinaryOp(other, operator.truediv, intermediate=np.float32)
+
+import os
+import shutil
+def savevid(frmpth,outvid,suff='.jpg'):
+    opth = frmpth.parent / 'temp_vid_frames'
+    shutil.rmtree(opth,ignore_errors=True)
+    opth.mkdir(exist_ok=True)
+    os.chdir(str(frmpth.parent))
+    frms = sorted(list(frmpth.glob('*'+suff)))
+
+    fnms = [f'frame{str(i).zfill(5)}.png' for i in range(len(frms)) ]
+    [shutil.copy(frm, opth/fn) for frm,fn in zip(frms,fnms)]
+    Path(outvid).unlink(missing_ok=True)
+    ! C:\Py\ffmpeg\bin\ffmpeg -framerate 30 -i {opth.name}/frame%05d.png -c:v libx264 -pix_fmt yuv420p {outvid}
+    shutil.rmtree(opth,ignore_errors=True)
+    print(f'Saved video: {outvid}')
