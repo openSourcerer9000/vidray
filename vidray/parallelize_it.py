@@ -22,5 +22,5 @@ def Cliente(n_workers: int = 6, threads_per_worker: int = 1, **kwargz) -> Client
     client = Client(n_workers=n_workers, threads_per_worker=threads_per_worker, **kwargz)
     print(f"Dask client dashboard at: {client.dashboard_link}")
     # Open the dashboard in Windows Explorer (Windows only)
-    Popen(f'explorer "{client.dashboard_link}"')
+    Popen(['open', client.dashboard_link])
     return client

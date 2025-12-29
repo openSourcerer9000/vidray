@@ -3,9 +3,10 @@
 *.hdf
 *.tif
 *.shp
+*._*
 
 #######################################
-
+tests/mock/ants/pch/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
