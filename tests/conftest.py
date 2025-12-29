@@ -5,7 +5,7 @@ import pytest
 import imageio
 
 from pathlib import Path
-from dask.distributed import Client
+from dask import config as dask_config
 
 from vidray import Img, Vid  # or wherever your classes are imported from
 
@@ -19,9 +19,8 @@ def daskClient():
     """
     Starts a local Dask distributed client for the test session.
     """
-    client = Client(processes=False, threads_per_worker=1, n_workers=1)
-    yield client
-    client.close()
+    dask_config.set(scheduler="single-threaded")
+    yield None
 
 @pytest.fixture(scope="session")
 def mockDirs():

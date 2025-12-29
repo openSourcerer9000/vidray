@@ -1,4 +1,5 @@
 import numpy as np
+import math
 from patchify import patchify  # Ensure you have patchify installed
 
 def patch(imgOrVid, z, overlap=20):
@@ -37,23 +38,27 @@ def patch(imgOrVid, z, overlap=20):
     # Determine if input is video (has frame dimension)
     f = ogshp[0] if len(ogshp) > 3 else None
 
-    # Pad spatial dimensions (but not frames if video)
-    if overlap:
-        pad_shp = [(0, overlap), (0, overlap), (0, 0)]
-        if f is not None:
-            pad_shp = [(0, 0)] + pad_shp
-        a = np.pad(a, pad_shp, mode='reflect')
-    padded_shape = a.shape
-
     # Get spatial dimensions from the original input (before padding)
     h, w, c = ogshp[-3:]
     
     # Compute patch size and step such that final stitched dimensions equal the original.
     # (h - overlap) is divided evenly among the vertical patches, then add back the overlap.
-    patch_h = ((h - overlap) // zu) + overlap
-    patch_w = ((w - overlap) // zv) + overlap
-    step_h = patch_h - overlap  # This equals (h - overlap) // zu
-    step_w = patch_w - overlap  # This equals (w - overlap) // zv
+    patch_h = math.ceil((h - overlap) / zu) + overlap
+    patch_w = math.ceil((w - overlap) / zv) + overlap
+    step_h = patch_h - overlap  # This equals ceil((h - overlap) / zu)
+    step_w = patch_w - overlap  # This equals ceil((w - overlap) / zv)
+    final_h = zu * step_h + overlap
+    final_w = zv * step_w + overlap
+
+    # Pad spatial dimensions (but not frames if video) to fit the final grid.
+    if overlap:
+        extra_h = max(0, final_h - (h + overlap))
+        extra_w = max(0, final_w - (w + overlap))
+        pad_shp = [(0, overlap + extra_h), (0, overlap + extra_w), (0, 0)]
+        if f is not None:
+            pad_shp = [(0, 0)] + pad_shp
+        a = np.pad(a, pad_shp, mode='reflect')
+    padded_shape = a.shape
 
     # Set winshape and step for patchify
     if f is not None:
@@ -185,7 +190,7 @@ def unpatch(patches, metadata, overlap=None, hres=None, wres=None):
                 weight[:, top:top+hres, left:left+wres, :] += mask
                 idx += 1
         out /= np.maximum(weight, 1e-8)
-        return out
+        return out[:, :H, :W, :]
     else:
         H, W, C = ogshp
         out = np.zeros((final_H, final_W, C), dtype=np.float32)
@@ -201,4 +206,4 @@ def unpatch(patches, metadata, overlap=None, hres=None, wres=None):
                 weight[top:top+hres, left:left+wres, :] += mask
                 idx += 1
         out /= np.maximum(weight, 1e-8)
-        return out
+        return out[:H, :W, :]

@@ -262,7 +262,7 @@ class Vid(BinaryOperable, Scalable):
         dims = list(self.data.dims)
         tiles = []
         for patch_arr in patches:
-            darr = da.from_array(patch_arr, chunks=self.data.chunks)
+            darr = da.from_array(patch_arr, chunks=patch_arr.shape)
             tile_da = xr.DataArray(darr, dims=dims)
             tiles.append(Vid.fromData(tile_da))
 
@@ -317,6 +317,10 @@ class Vid(BinaryOperable, Scalable):
         tiles = np.stack(patch_arrays, axis=0)
         hres, wres = metadata["patch_size"]
         stitched = unpatch(tiles, metadata, overlap=metadata.get("overlap"), hres=hres, wres=wres)
+        target_dtype = np.dtype(metadata.get("dtype", "uint8"))
+        if np.issubdtype(target_dtype, np.integer):
+            stitched = np.clip(stitched, 0, 255)
+        stitched = stitched.astype(target_dtype)
 
         if chunks is None:
             chunks = metadata.get("chunks", (1, 512, 512, -1))
