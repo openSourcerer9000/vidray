@@ -24,6 +24,7 @@ from dask import delayed
 import imageio
 from PIL import Image
 import pandas as pd
+from funkshuns import asList,listChunk
 
 if __package__ is None or __package__ == "":
     from parallelize_it import Cliente
@@ -72,9 +73,28 @@ def _write_vid_frames(vid: "Vid", outdir: Path, pre: str, suff: str, overwrite: 
     for i in range(n_frames):
         out_pth = outdir / f"{pre}{i:08d}{suff}"
         if out_pth.exists() and not overwrite:
-            raise FileExistsError(f"File {out_pth} already exists and overwrite=False.")
+            continue
         frame = vid.data.isel(frame=i).compute().values
         imageio.imwrite(str(out_pth), frame)
+
+def _default_batch_size_4k(target_mb: int = 2048) -> int:
+    frame_bytes = 3840 * 2160 * 3  # 4k RGB uint8
+    target_bytes = target_mb * 1024 * 1024
+    return max(1, target_bytes // frame_bytes)
+
+def _existing_frame_indices(tile_dir: Path, frame_prefix: str, suff: str) -> set:
+    indices = set()
+    if not tile_dir.exists():
+        return indices
+    for pth in tile_dir.glob(f"{frame_prefix}*{suff}"):
+        stem = pth.stem
+        if not stem.startswith(frame_prefix):
+            continue
+        idx_str = stem[len(frame_prefix):]
+        if not idx_str.isdigit():
+            continue
+        indices.add(int(idx_str))
+    return indices
 
 def _parallelBinaryOp(xr1: xr.DataArray,
                       xr2: xr.DataArray,
@@ -163,6 +183,8 @@ class Vid(BinaryOperable, Scalable):
                     pathsOrImgs = pngs
             else:
                 pathsOrImgs = [pathsOrImgs]
+        else:
+            pathsOrImgs = asList(pathsOrImgs)
         if not pathsOrImgs:
             raise ValueError("No frames provided to Vid.")
         first = pathsOrImgs[0]
@@ -249,6 +271,7 @@ class Vid(BinaryOperable, Scalable):
               z: Union[int, tuple],
               outdir: Optional[Path] = None,
               overlap: int = 20,
+              batch_size: Optional[int] = None,
               tile_prefix: str = "tile_",
               frame_prefix: str = "frame",
               suff: str = ".jpg",
@@ -256,43 +279,118 @@ class Vid(BinaryOperable, Scalable):
         """
         Split a video into spatial tiles as Vid objects. Optionally serialize tiles to disk with metadata.
         """
-        arr = self.data.compute().values
-        patches, metadata = patch(arr, z, overlap=overlap)
-
         dims = list(self.data.dims)
+        n_frames = int(self.data.sizes["frame"])
+
+        if batch_size is None and outdir is not None:
+            batch_size = _default_batch_size_4k()
+        if batch_size is not None and outdir is None:
+            raise ValueError("batch_size requires outdir so tiles can be streamed to disk.")
+
+        if batch_size is None:
+            arr = self.data.compute().values
+            patches, metadata = patch(arr, z, overlap=overlap)
+
+            tiles = []
+            for patch_arr in patches:
+                darr = da.from_array(patch_arr, chunks=patch_arr.shape)
+                tile_da = xr.DataArray(darr, dims=dims)
+                tiles.append(Vid.fromData(tile_da))
+
+            metadata.update({
+                "version": 1,
+                "overlap": overlap,
+                "dims": dims,
+                "dtype": str(self.data.dtype),
+                "tile_count": len(tiles),
+                "tile_prefix": tile_prefix,
+                "frame_prefix": frame_prefix,
+                "suff": suff,
+            })
+
+            if outdir is not None:
+                outdir = Path(outdir)
+                outdir.mkdir(parents=True, exist_ok=True)
+                tile_entries = []
+                for idx, tile in enumerate(tiles):
+                    tile_dir = outdir / f"{tile_prefix}{idx:04d}"
+                    if tile_dir.exists() and not overwrite:
+                        raise FileExistsError(f"Directory {tile_dir} already exists and overwrite=False.")
+                    tile_dir.mkdir(parents=True, exist_ok=True)
+                    _write_vid_frames(tile, tile_dir, pre=frame_prefix, suff=suff, overwrite=overwrite)
+                    tile_entries.append({"index": idx, "path": tile_dir.name})
+                metadata["tiles"] = tile_entries
+                metadata_path = outdir / "metadata.json"
+                if metadata_path.exists() and not overwrite:
+                    raise FileExistsError(f"File {metadata_path} already exists and overwrite=False.")
+                metadata_path.write_text(json.dumps(metadata, indent=2))
+
+            return tiles, metadata
+
+        outdir = Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        frame_indices = list(range(n_frames))
+        batches = listChunk(frame_indices, batch_size)
+        try:
+            from tqdm import tqdm
+            batch_iter = tqdm(batches, desc="patch batches")
+        except Exception:
+            batch_iter = batches
+
         tiles = []
-        for patch_arr in patches:
-            darr = da.from_array(patch_arr, chunks=patch_arr.shape)
-            tile_da = xr.DataArray(darr, dims=dims)
-            tiles.append(Vid.fromData(tile_da))
+        metadata = None
+        tile_dirs = []
 
-        metadata.update({
-            "version": 1,
-            "overlap": overlap,
-            "dims": dims,
-            "dtype": str(self.data.dtype),
-            "tile_count": len(tiles),
-            "tile_prefix": tile_prefix,
-            "frame_prefix": frame_prefix,
-            "suff": suff,
-        })
+        for batch in batch_iter:
+            start = batch[0]
+            stop = batch[-1] + 1
+            arr = self.data.isel(frame=slice(start, stop)).compute().values
+            patches, batch_meta = patch(arr, z, overlap=overlap)
 
-        if outdir is not None:
-            outdir = Path(outdir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            tile_entries = []
-            for idx, tile in enumerate(tiles):
-                tile_dir = outdir / f"{tile_prefix}{idx:04d}"
-                if tile_dir.exists() and not overwrite:
-                    raise FileExistsError(f"Directory {tile_dir} already exists and overwrite=False.")
-                tile_dir.mkdir(parents=True, exist_ok=True)
-                _write_vid_frames(tile, tile_dir, pre=frame_prefix, suff=suff, overwrite=overwrite)
-                tile_entries.append({"index": idx, "path": tile_dir.name})
-            metadata["tiles"] = tile_entries
-            metadata_path = outdir / "metadata.json"
-            if metadata_path.exists() and not overwrite:
-                raise FileExistsError(f"File {metadata_path} already exists and overwrite=False.")
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+            if metadata is None:
+                metadata = batch_meta
+                metadata.update({
+                    "version": 1,
+                    "overlap": overlap,
+                    "dims": dims,
+                    "dtype": str(self.data.dtype),
+                    "tile_count": len(patches),
+                    "batch_size": batch_size,
+                    "tile_prefix": tile_prefix,
+                    "frame_prefix": frame_prefix,
+                    "suff": suff,
+                })
+                og_shape = list(metadata["original_shape"])
+                og_shape[0] = n_frames
+                metadata["original_shape"] = tuple(og_shape)
+                padded_shape = list(metadata["padded_shape"])
+                padded_shape[0] = n_frames
+                metadata["padded_shape"] = tuple(padded_shape)
+
+                tile_entries = []
+                for idx in range(len(patches)):
+                    tile_dir = outdir / f"{tile_prefix}{idx:04d}"
+                    if tile_dir.exists() and not overwrite:
+                        raise FileExistsError(f"Directory {tile_dir} already exists and overwrite=False.")
+                    tile_dir.mkdir(parents=True, exist_ok=True)
+                    tile_dirs.append(tile_dir)
+                    tile_entries.append({"index": idx, "path": tile_dir.name})
+                metadata["tiles"] = tile_entries
+
+            for tile_idx, patch_arr in enumerate(patches):
+                tile_dir = tile_dirs[tile_idx]
+                for local_idx in range(patch_arr.shape[0]):
+                    global_idx = start + local_idx
+                    out_pth = tile_dir / f"{frame_prefix}{global_idx:08d}{suff}"
+                    if out_pth.exists() and not overwrite:
+                        continue
+                    imageio.imwrite(str(out_pth), patch_arr[local_idx])
+
+        metadata_path = outdir / "metadata.json"
+        if metadata_path.exists() and not overwrite:
+            raise FileExistsError(f"File {metadata_path} already exists and overwrite=False.")
+        metadata_path.write_text(json.dumps(metadata, indent=2))
 
         return tiles, metadata
 
