@@ -82,19 +82,29 @@ def _default_batch_size_4k(target_mb: int = 2048) -> int:
     target_bytes = target_mb * 1024 * 1024
     return max(1, target_bytes // frame_bytes)
 
-def _existing_frame_indices(tile_dir: Path, frame_prefix: str, suff: str) -> set:
-    indices = set()
-    if not tile_dir.exists():
-        return indices
-    for pth in tile_dir.glob(f"{frame_prefix}*{suff}"):
-        stem = pth.stem
-        if not stem.startswith(frame_prefix):
-            continue
-        idx_str = stem[len(frame_prefix):]
-        if not idx_str.isdigit():
-            continue
-        indices.add(int(idx_str))
-    return indices
+def _existing_frame_indices(tile_dirs: List[Path], frame_prefix: str, suff: str) -> set:
+    if not tile_dirs:
+        return set()
+    existing = None
+    for tile_dir in tile_dirs:
+        if not tile_dir.exists():
+            return set()
+        indices = set()
+        for pth in tile_dir.glob(f"{frame_prefix}*{suff}"):
+            stem = pth.stem
+            if not stem.startswith(frame_prefix):
+                continue
+            idx_str = stem[len(frame_prefix):]
+            if not idx_str.isdigit():
+                continue
+            indices.add(int(idx_str))
+        if existing is None:
+            existing = indices
+        else:
+            existing &= indices
+        if not existing:
+            return set()
+    return existing if existing is not None else set()
 
 def _parallelBinaryOp(xr1: xr.DataArray,
                       xr2: xr.DataArray,
@@ -314,32 +324,39 @@ class Vid(BinaryOperable, Scalable):
                 tile_entries = []
                 for idx, tile in enumerate(tiles):
                     tile_dir = outdir / f"{tile_prefix}{idx:04d}"
-                    if tile_dir.exists() and not overwrite:
-                        raise FileExistsError(f"Directory {tile_dir} already exists and overwrite=False.")
                     tile_dir.mkdir(parents=True, exist_ok=True)
                     _write_vid_frames(tile, tile_dir, pre=frame_prefix, suff=suff, overwrite=overwrite)
                     tile_entries.append({"index": idx, "path": tile_dir.name})
                 metadata["tiles"] = tile_entries
                 metadata_path = outdir / "metadata.json"
-                if metadata_path.exists() and not overwrite:
-                    raise FileExistsError(f"File {metadata_path} already exists and overwrite=False.")
-                metadata_path.write_text(json.dumps(metadata, indent=2))
+                if not metadata_path.exists() or overwrite:
+                    metadata_path.write_text(json.dumps(metadata, indent=2))
 
             return tiles, metadata
 
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
 
-        frame_indices = list(range(n_frames))
+        metadata = None
+        existing_frames = set()
+        metadata_path = outdir / "metadata.json"
+        if not overwrite:
+            if metadata_path.exists():
+                try:
+                    metadata = json.loads(metadata_path.read_text())
+                except Exception:
+                    metadata = None
+            existing_tile_dirs = sorted(outdir.glob(f"{tile_prefix}*"))
+            existing_frames = _existing_frame_indices(existing_tile_dirs, frame_prefix, suff)
+
+        frame_indices = [i for i in range(n_frames) if i not in existing_frames]
         batches = listChunk(frame_indices, batch_size)
-        try:
-            from tqdm import tqdm
-            batch_iter = tqdm(batches, desc="patch batches")
-        except Exception:
-            batch_iter = batches
+        batch_iter = batches
+
+        if not batches:
+            return [], metadata
 
         tiles = []
-        metadata = None
         tile_dirs = []
 
         for batch in batch_iter:
@@ -371,8 +388,6 @@ class Vid(BinaryOperable, Scalable):
                 tile_entries = []
                 for idx in range(len(patches)):
                     tile_dir = outdir / f"{tile_prefix}{idx:04d}"
-                    if tile_dir.exists() and not overwrite:
-                        raise FileExistsError(f"Directory {tile_dir} already exists and overwrite=False.")
                     tile_dir.mkdir(parents=True, exist_ok=True)
                     tile_dirs.append(tile_dir)
                     tile_entries.append({"index": idx, "path": tile_dir.name})
@@ -388,9 +403,8 @@ class Vid(BinaryOperable, Scalable):
                     imageio.imwrite(str(out_pth), patch_arr[local_idx])
 
         metadata_path = outdir / "metadata.json"
-        if metadata_path.exists() and not overwrite:
-            raise FileExistsError(f"File {metadata_path} already exists and overwrite=False.")
-        metadata_path.write_text(json.dumps(metadata, indent=2))
+        if not metadata_path.exists() or overwrite:
+            metadata_path.write_text(json.dumps(metadata, indent=2))
 
         return tiles, metadata
 
