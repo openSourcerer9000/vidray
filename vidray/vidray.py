@@ -323,7 +323,7 @@ class Vid(BinaryOperable, Scalable):
                 outdir.mkdir(parents=True, exist_ok=True)
                 tile_entries = []
                 for idx, tile in enumerate(tiles):
-                    tile_dir = outdir / f"{tile_prefix}{idx:04d}"
+                    tile_dir = outdir / f"{tile_prefix}{idx}"
                     tile_dir.mkdir(parents=True, exist_ok=True)
                     _write_vid_frames(tile, tile_dir, pre=frame_prefix, suff=suff, overwrite=overwrite)
                     tile_entries.append({"index": idx, "path": tile_dir.name})
