@@ -36,3 +36,55 @@ def savevid(frmpth,outvid,fps=30,suff='.jpg'):
     cmder(*cmd.split())
     shutil.rmtree(opth,ignore_errors=True)
     print(f'Saved video: {outvid}')
+
+import subprocess
+from pathlib import Path
+
+def ytdl(source, target_format='a',outpth='cwd', extra_args=None):
+    """
+    ... docstring ...
+    """
+    # Path source for better checking
+    src_path = Path(source)
+
+    # Determine URLs to download
+    if src_path.is_file():
+        urls_to_process = [line.strip() for line in src_path.read_text().splitlines()]
+    else:
+        urls_to_process = [source]
+
+    # Determine base flags for format
+    if target_format == 'v':
+        format_flags = ['-f', 'bv+ba/b']
+    else: # Default to audio
+        format_flags = ['-x']
+
+    base_command = ['yt-dlp'] + format_flags
+    
+    # Process extra_args
+    if extra_args:
+        for flag, value in extra_args.items():
+            # Handle flags like {'-x': True} or {'--embed-metadata': None}
+            if value is True or isinstance(value, type(None)):
+                base_command.append(flag)
+            else:
+                 # Handle key-value pairs
+                base_command.extend([flag, str(value)])
+
+    # Download loop
+    for url in urls_to_process:
+        if not url: continue # Skip empty lines
+        print(f"Downloading: {url}")
+        
+        try:
+            command_to_run = base_command + [url]
+            subprocess.run(command_to_run, check=True) # check=True raises CalledProcessError on failure
+        except FileNotFoundError:
+            print("Error: yt-dlp command not found. Please install it with 'pip install yt-dlp'.")
+            break
+        except subprocess.CalledProcessError as e:
+            print(f"yt-dlp failed for URL '{url}' with return code {e.returncode}.")
+            print("--- Standard Error ---\n" + e.stderr.decode() if e.stderr else "")
+        except Exception as e:
+            print(f"An unexpected error occurred for URL '{url}': {e}")
+
