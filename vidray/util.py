@@ -2,23 +2,81 @@
 from funkshuns import cmder
 from pathlib import Path
 
-def vid2frames(inputVid: Path,outpth:Path, outputPattern='frames_%06d.jpg'):
-    """
-    Extract frames from a video file using ffmpeg.
+# def vid2frames(inputVid: Path,outpth:Path, outputPattern='frames_%06d.jpg'):
+#     """
+#     Extract frames from a video file using ffmpeg.
 
-    Args:
-        inputVid (Path): Path to the input video file.
-        outputPattern (str): Output filename pattern for extracted frames.
-                                Example: 'frames_%06d.jpg' will create files like frames_000001.jpg, frames_000002.jpg, etc.
-    """
+#     Args:
+#         inputVid (Path): Path to the input video file.
+#         outputPattern (str): Output filename pattern for extracted frames.
+#                                 Example: 'frames_%06d.jpg' will create files like frames_000001.jpg, frames_000002.jpg, etc.
+#     """
 
-    outpth.mkdir(exist_ok=True,parents= True)
-    cmd = f'ffmpeg -i {inputVid} -vsync 0 {outpth}/{outputPattern}'
-    if ' ' in str(outpth):
-        cmd = f'ffmpeg -i "{inputVid}" -vsync 0 "{outpth}/{outputPattern}"'
-        print('You need to run this manually since your path has spaces in it:', cmd)
-        raise ValueError('Path has spaces, run manually', cmd)
-    cmder(*cmd.split())
+#     outpth.mkdir(exist_ok=True,parents= True)
+#     cmd = f'ffmpeg -i {inputVid} -vsync 0 {outpth}/{outputPattern}'
+#     if ' ' in str(outpth):
+#         cmd = f'ffmpeg -i "{inputVid}" -vsync 0 "{outpth}/{outputPattern}"'
+#         print('You need to run this manually since your path has spaces in it:', cmd)
+#         raise ValueError('Path has spaces, run manually', cmd)
+#     cmder(*cmd.split())
+from fractions import Fraction
+
+
+
+def video_fps(pth: Path | str) -> float:
+    rate = subprocess.check_output(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=avg_frame_rate",
+            "-of", "default=nw=1:nk=1",
+            str(pth),
+        ],
+        text=True,
+    ).strip()
+
+    return float(Fraction(rate))
+def vid2frames(
+    inputVid: Path | str,
+    outpth: Path | str,
+    outputPattern: str = "frames_%06d.jpg",
+    x: int = 3,
+    base_fps: int = 30,
+    max_w: int = 1280,
+    max_h: int = 720,
+    quality: int = 2,
+):
+    """
+    Extract every x frames at base_fps, scaling only upward for higher FPS.
+
+    x=3, base_fps=30:
+        24 fps -> every 3 frames
+        30 fps -> every 3 frames
+        60 fps -> every 6 frames
+    """
+    inputVid, outpth = Path(inputVid), Path(outpth)
+    outpth.mkdir(exist_ok=True, parents=True)
+
+    fps = video_fps(inputVid)
+    every = max(x, round(x * fps / base_fps))
+
+    vf = (
+        f"select='not(mod(n,{every}))',"
+        f"scale='min({max_w},iw)':'min({max_h},ih)':"
+        "force_original_aspect_ratio=decrease"
+    )
+
+    cmder(
+        "ffmpeg",
+        "-i", str(inputVid),
+        "-vf", vf,
+        "-fps_mode", "vfr",
+        "-q:v", str(quality),
+        str(outpth / outputPattern),
+    )
+
+    return every
 
 import os
 import shutil
